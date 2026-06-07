@@ -8,11 +8,11 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: {
-    default: "論文工程管理",
-    template: "%s | 論文工程管理",
+    default: "論文伴走カード",
+    template: "%s | 論文伴走カード",
   },
   description:
-    "大学生・大学院生の論文作成工程と進捗を管理するWebアプリです。",
+    "カードを選びながら論文作成の工程と次の一歩を整理するWebアプリです。",
 };
 
 type RootLayoutProps = Readonly<{
