@@ -1,8 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
+import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { useEffect, useMemo, useState, type ChangeEvent, type ReactNode } from "react";
 import { initialThesisProcesses } from "@/data/initial-thesis-processes";
+import { auth, db, googleProvider, hasFirebaseConfig } from "@/lib/firebase";
 import {
   TASK_PRIORITY_LABELS,
   TASK_STATUS_LABELS,
@@ -18,7 +21,7 @@ type Process = Omit<ThesisProcess, "tasks"> & { tasks: Task[] };
 type Entry = { process: Process; task: Task };
 type Props = { view: "dashboard" | "processes" };
 
-const KEY = "thesis-progress-app.processes.v1";
+const PROJECT_ID = "default-thesis-project";
 const STATUSES: TaskStatus[] = ["not_started", "in_progress", "waiting_for_review", "completed", "on_hold"];
 const PRIORITIES: TaskPriority[] = ["high", "medium", "low"];
 const PORDER: Record<TaskPriority, number> = { high: 0, medium: 1, low: 2 };
@@ -29,30 +32,35 @@ const initial = (): Process[] =>
     tasks: p.tasks.map((t) => ({ ...t, priority: t.priority ?? "medium" })),
   }));
 
-function restore(raw: string): Process[] {
+function mergeSaved(value: unknown): Process[] {
   const base = initial();
-  try {
-    const value = JSON.parse(raw) as Array<{ tasks?: Array<Partial<Task> & { id?: string }> }>;
-    const map = new Map<string, Partial<Task>>();
-    value.forEach((p) => p.tasks?.forEach((t) => t.id && map.set(t.id, t)));
-    return base.map((p) => ({
-      ...p,
-      tasks: p.tasks.map((t) => {
-        const s = map.get(t.id);
-        if (!s) return t;
-        return {
-          ...t,
-          status: s.status && STATUSES.includes(s.status) ? s.status : t.status,
-          priority: s.priority && PRIORITIES.includes(s.priority) ? s.priority : t.priority,
-          progress: typeof s.progress === "number" ? Math.min(100, Math.max(0, Math.round(s.progress))) : t.progress,
-          deadline: s.deadline === null || (typeof s.deadline === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s.deadline)) ? s.deadline : t.deadline,
-          memo: typeof s.memo === "string" ? s.memo : t.memo,
-        };
-      }),
-    }));
-  } catch {
-    return base;
-  }
+  if (!Array.isArray(value)) return base;
+
+  const map = new Map<string, Partial<Task>>();
+  value.forEach((process) => {
+    const tasks = (process as { tasks?: unknown }).tasks;
+    if (!Array.isArray(tasks)) return;
+    tasks.forEach((task) => {
+      const saved = task as Partial<Task> & { id?: unknown };
+      if (typeof saved.id === "string") map.set(saved.id, saved);
+    });
+  });
+
+  return base.map((p) => ({
+    ...p,
+    tasks: p.tasks.map((t) => {
+      const s = map.get(t.id);
+      if (!s) return t;
+      return {
+        ...t,
+        status: s.status && STATUSES.includes(s.status) ? s.status : t.status,
+        priority: s.priority && PRIORITIES.includes(s.priority) ? s.priority : t.priority,
+        progress: typeof s.progress === "number" ? Math.min(100, Math.max(0, Math.round(s.progress))) : t.progress,
+        deadline: s.deadline === null || (typeof s.deadline === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s.deadline)) ? s.deadline : t.deadline,
+        memo: typeof s.memo === "string" ? s.memo : t.memo,
+      };
+    }),
+  }));
 }
 
 const date = (value: ISODateString) => new Date(`${value}T00:00:00`);
@@ -66,18 +74,114 @@ const sortEntries = (a: Entry, b: Entry) => PORDER[a.task.priority] - PORDER[b.t
 const statusClass = (s: TaskStatus) => ({ not_started:"bg-slate-100 text-slate-600", in_progress:"bg-blue-50 text-blue-700", waiting_for_review:"bg-amber-50 text-amber-700", completed:"bg-emerald-50 text-emerald-700", on_hold:"bg-rose-50 text-rose-700" })[s];
 const priorityClass = (p: TaskPriority) => p === "high" ? "bg-rose-50 text-rose-700" : p === "low" ? "bg-slate-100 text-slate-600" : "bg-amber-50 text-amber-700";
 
+function projectRef(userId: string) {
+  if (!db) throw new Error("Firebaseの環境変数が未設定です。.env.localを確認してください。");
+  return doc(db, "users", userId, "projects", PROJECT_ID);
+}
+
+async function loadProject(userId: string): Promise<Process[]> {
+  const ref = projectRef(userId);
+  const snapshot = await getDoc(ref);
+  if (snapshot.exists()) return mergeSaved(snapshot.data().processes);
+
+  const fresh = initial();
+  await setDoc(ref, {
+    title: "論文工程管理",
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    processes: fresh,
+  });
+  return fresh;
+}
+
+async function saveProject(userId: string, processes: Process[]) {
+  await setDoc(projectRef(userId), {
+    title: "論文工程管理",
+    updatedAt: serverTimestamp(),
+    processes,
+  }, { merge: true });
+}
+
 export function ThesisManager({ view }: Props) {
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [dataLoading, setDataLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [processes, setProcesses] = useState<Process[]>(initial);
   const [now, setNow] = useState<Date | null>(null);
+
+  useEffect(() => {
+    if (!hasFirebaseConfig || !auth) {
+      setError("Firebaseの環境変数が未設定です。.env.localを確認してください。");
+      setAuthLoading(false);
+      return;
+    }
+
+    return onAuthStateChanged(auth, (nextUser) => {
+      setUser(nextUser);
+      setAuthLoading(false);
+      setError(null);
+    }, () => {
+      setError("認証状態を確認できませんでした。時間をおいて再度お試しください。");
+      setAuthLoading(false);
+    });
+  }, []);
+
   useEffect(() => {
     setNow(today());
-    const saved = localStorage.getItem(KEY);
-    if (saved) setProcesses(restore(saved));
-  }, []);
+    if (!user) {
+      setProcesses(initial());
+      setDataLoading(false);
+      return;
+    }
+
+    let active = true;
+    setDataLoading(true);
+    loadProject(user.uid)
+      .then((loaded) => { if (active) setProcesses(loaded); })
+      .catch(() => { if (active) setError("Firestoreからデータを読み込めませんでした。"); })
+      .finally(() => { if (active) setDataLoading(false); });
+
+    return () => { active = false; };
+  }, [user]);
+
+  const login = async () => {
+    if (!auth) return setError("Firebase Authenticationを初期化できませんでした。");
+    setError(null);
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch {
+      setError("Googleログインに失敗しました。もう一度お試しください。");
+    }
+  };
+
+  const logout = async () => {
+    if (!auth) return;
+    setError(null);
+    try {
+      await signOut(auth);
+    } catch {
+      setError("ログアウトに失敗しました。もう一度お試しください。");
+    }
+  };
+
+  const persist = async (next: Process[]) => {
+    if (!user) return setError("保存するにはログインが必要です。");
+    setSaving(true);
+    setError(null);
+    try {
+      await saveProject(user.uid, next);
+    } catch {
+      setError("Firestoreへの保存に失敗しました。通信状態や権限を確認してください。");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const save = (fn: (current: Process[]) => Process[]) => setProcesses((current) => {
     const next = fn(current);
-    localStorage.setItem(KEY, JSON.stringify(next));
+    void persist(next);
     return next;
   });
   const patch = (pid: string, tid: string, changes: Partial<Task>) => save((all) => all.map((p) => p.id === pid ? { ...p, tasks: p.tasks.map((t) => t.id === tid ? { ...t, ...changes } : t) } : p));
@@ -91,9 +195,8 @@ export function ThesisManager({ view }: Props) {
     patch(pid, task.id, { progress, status });
   };
   const reset = () => {
-    if (!confirm("このブラウザに保存した変更を初期状態に戻しますか？")) return;
-    localStorage.removeItem(KEY);
-    setProcesses(initial());
+    if (!confirm("Firestoreに保存した変更を初期状態に戻しますか？")) return;
+    save(() => initial());
   };
 
   const entries = useMemo(() => processes.flatMap((process) => process.tasks.map((task) => ({ process, task }))), [processes]);
@@ -103,17 +206,29 @@ export function ThesisManager({ view }: Props) {
   const week = entries.filter(({ task }) => isThisWeek(task, now)).sort(sortEntries);
   const priority = entries.filter(({ task }) => task.status !== "completed").sort(sortEntries).slice(0, 5);
 
+  if (authLoading) return <Loading message="認証状態を確認しています。" />;
+  if (!user) return <LoginScreen error={error} onLogin={login} />;
+  if (dataLoading) return <Loading message="Firestoreから工程データを読み込んでいます。" />;
+
+  const notices = <StatusNotices error={error} saving={saving} />;
+  const account = <Account user={user} onLogout={logout} />;
+
   return view === "dashboard" ? (
-    <Dashboard processes={processes} total={entries.length} completed={completed} overall={overall} overdue={overdue} week={week} priority={priority} />
+    <>{notices}<Dashboard processes={processes} total={entries.length} completed={completed} overall={overall} overdue={overdue} week={week} priority={priority} account={account} /></>
   ) : (
-    <ProcessList processes={processes} total={entries.length} completed={completed} overall={overall} overdueCount={overdue.length} now={now} patch={patch} changeStatus={changeStatus} changeProgress={changeProgress} reset={reset} />
+    <>{notices}<ProcessList processes={processes} total={entries.length} completed={completed} overall={overall} overdueCount={overdue.length} now={now} patch={patch} changeStatus={changeStatus} changeProgress={changeProgress} reset={reset} account={account} /></>
   );
 }
 
-function Dashboard({ processes, total, completed, overall, overdue, week, priority }: { processes: Process[]; total: number; completed: number; overall: number; overdue: Entry[]; week: Entry[]; priority: Entry[] }) {
+function Loading({ message }: { message: string }) { return <div className="mx-auto max-w-7xl"><section className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">{message}</section></div>; }
+function LoginScreen({ error, onLogin }: { error: string | null; onLogin: () => void }) { return <main className="mx-auto flex min-h-[60vh] max-w-xl items-center"><section className="w-full rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"><h1 className="text-2xl font-bold">論文工程管理</h1><p className="mt-2 text-sm leading-6 text-slate-600">Googleアカウントでログインすると、自分専用の工程データをFirestoreに保存できます。</p>{error && <p className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}<button onClick={onLogin} className="mt-6 w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white">Googleでログイン</button></section></main>; }
+function StatusNotices({ error, saving }: { error: string | null; saving: boolean }) { if (!error && !saving) return null; return <div className="mx-auto mb-4 max-w-7xl space-y-2">{saving && <p className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-700">Firestoreへ保存しています。</p>}{error && <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}</div>; }
+function Account({ user, onLogout }: { user: User; onLogout: () => void }) { return <div className="flex flex-wrap items-center justify-end gap-3"><span className="text-xs text-slate-500">{user.email ?? "ログイン中"}</span><button onClick={onLogout} className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700">ログアウト</button></div>; }
+
+function Dashboard({ processes, total, completed, overall, overdue, week, priority, account }: { processes: Process[]; total: number; completed: number; overall: number; overdue: Entry[]; week: Entry[]; priority: Entry[]; account: ReactNode }) {
   return <div className="mx-auto max-w-7xl">
-    <Header title="ダッシュボード" text="工程別進捗、締切超過、今週のタスクを確認できます。" action={<Link href="/processes" className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white">工程を編集する</Link>} />
-    <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Stat label="全体進捗" value={`${overall}%`} detail={`${completed}件完了／全${total}件`} /><Stat label="締切超過" value={`${overdue.length}件`} detail="未完了で期限超過" alert={overdue.length > 0} /><Stat label="今週のタスク" value={`${week.length}件`} detail="月曜日から日曜日" /><Stat label="保存先" value="ブラウザ" detail="Firestore未使用" /></div>
+    <Header title="ダッシュボード" text="工程別進捗、締切超過、今週のタスクを確認できます。" action={<div className="flex flex-wrap items-center justify-end gap-3"><Link href="/processes" className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white">工程を編集する</Link>{account}</div>} />
+    <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Stat label="全体進捗" value={`${overall}%`} detail={`${completed}件完了／全${total}件`} /><Stat label="締切超過" value={`${overdue.length}件`} detail="未完了で期限超過" alert={overdue.length > 0} /><Stat label="今週のタスク" value={`${week.length}件`} detail="月曜日から日曜日" /><Stat label="保存先" value="Firestore" detail="ログイン利用者ごとに保存" /></div>
     <section className="mt-6 rounded-2xl bg-indigo-700 p-6 text-white shadow-sm lg:p-8"><div className="flex items-end justify-between"><div><p className="text-sm text-indigo-100">論文全体の進捗</p><p className="mt-2 text-4xl font-bold">{overall}%</p></div><p className="text-sm text-indigo-100">{completed} / {total} 完了</p></div><Bar value={overall} light /></section>
     <div className="mt-6 grid gap-6 xl:grid-cols-2"><Tasks title="今週のタスク" entries={week} empty="今週が締切のタスクはありません。" /><Tasks title="締切を過ぎたタスク" entries={overdue} empty="締切を過ぎたタスクはありません。" alert /></div>
     <Tasks title="優先して進めるタスク" entries={priority} empty="未完了のタスクはありません。" />
@@ -121,10 +236,10 @@ function Dashboard({ processes, total, completed, overall, overdue, week, priori
   </div>;
 }
 
-function ProcessList({ processes, total, completed, overall, overdueCount, now, patch, changeStatus, changeProgress, reset }: { processes: Process[]; total: number; completed: number; overall: number; overdueCount: number; now: Date | null; patch: (pid: string, tid: string, changes: Partial<Task>) => void; changeStatus: (pid: string, task: Task, status: TaskStatus) => void; changeProgress: (pid: string, task: Task, value: number) => void; reset: () => void }) {
+function ProcessList({ processes, total, completed, overall, overdueCount, now, patch, changeStatus, changeProgress, reset, account }: { processes: Process[]; total: number; completed: number; overall: number; overdueCount: number; now: Date | null; patch: (pid: string, tid: string, changes: Partial<Task>) => void; changeStatus: (pid: string, task: Task, status: TaskStatus) => void; changeProgress: (pid: string, task: Task, value: number) => void; reset: () => void; account: ReactNode }) {
   return <div className="mx-auto max-w-7xl">
-    <Header title="論文工程管理" text="状態、締切日、進捗率、優先度、メモはこのブラウザに自動保存されます。" action={<button onClick={reset} className="rounded-xl border border-rose-200 px-4 py-2.5 text-sm font-semibold text-rose-700">初期状態に戻す</button>} />
-    <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Stat label="全体進捗" value={`${overall}%`} detail={`${completed}件完了／全${total}件`} /><Stat label="工程数" value={`${processes.length}`} detail="テーマ検討から提出まで" /><Stat label="締切超過" value={`${overdueCount}件`} detail="未完了で期限超過" alert={overdueCount > 0} /><Stat label="保存先" value="ブラウザ" detail="Firestore未使用" /></div>
+    <Header title="論文工程管理" text="状態、締切日、進捗率、優先度、メモはFirestoreに自動保存されます。" action={<div className="flex flex-wrap items-center justify-end gap-3"><button onClick={reset} className="rounded-xl border border-rose-200 px-4 py-2.5 text-sm font-semibold text-rose-700">初期状態に戻す</button>{account}</div>} />
+    <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Stat label="全体進捗" value={`${overall}%`} detail={`${completed}件完了／全${total}件`} /><Stat label="工程数" value={`${processes.length}`} detail="テーマ検討から提出まで" /><Stat label="締切超過" value={`${overdueCount}件`} detail="未完了で期限超過" alert={overdueCount > 0} /><Stat label="保存先" value="Firestore" detail="ログイン利用者ごとに保存" /></div>
     <section className="mt-6 rounded-2xl bg-indigo-700 p-6 text-white shadow-sm lg:p-8"><div className="flex items-end justify-between"><div><p className="text-sm text-indigo-100">論文全体の進捗</p><p className="mt-2 text-4xl font-bold">{overall}%</p></div><p className="text-sm text-indigo-100">{completed} / {total} 完了</p></div><Bar value={overall} light /></section>
     <div className="mt-6 space-y-5">{processes.map((p) => { const value = avg(p.tasks); const done = p.tasks.filter((t) => t.status === "completed").length; const late = p.tasks.filter((t) => isOverdue(t, now)).length; return <section key={p.id} id={p.id} className="scroll-mt-24 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"><details open={p.order <= 2}><summary className="cursor-pointer list-none px-5 py-5 sm:px-6"><div className="flex gap-4"><span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-indigo-100 font-bold text-indigo-700">{p.order}</span><div className="min-w-0 flex-1"><div className="flex flex-col gap-2 lg:flex-row lg:justify-between"><div><h2 className="text-lg font-bold">{p.title}</h2><p className="mt-1 text-sm text-slate-600">{p.description}</p></div><div className="flex flex-wrap gap-2 text-xs"><Badge text={`進捗 ${value}%`} cls="bg-indigo-50 text-indigo-700" /><Badge text={`${done}/${p.tasks.length}件完了`} cls="bg-slate-100 text-slate-600" />{late > 0 && <Badge text={`超過 ${late}件`} cls="bg-rose-50 text-rose-700" />}</div></div><Bar value={value} /></div></div></summary><ol className="space-y-4 border-t border-slate-200 bg-slate-50/60 p-4 sm:p-6">{p.tasks.map((t) => <Editor key={t.id} pid={p.id} task={t} late={isOverdue(t, now)} patch={patch} changeStatus={changeStatus} changeProgress={changeProgress} />)}</ol></details></section>; })}</div>
   </div>;
