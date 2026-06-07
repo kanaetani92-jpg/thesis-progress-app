@@ -1,5 +1,5 @@
-import { ThesisManager } from "@/components/ThesisManager";
+import { CompanionHome } from "@/components/CompanionHome";
 
-export default function DashboardPage() {
-  return <ThesisManager view="dashboard" />;
+export default function HomePage() {
+  return <CompanionHome />;
 }
