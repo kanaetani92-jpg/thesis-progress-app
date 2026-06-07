@@ -1,9 +1,21 @@
 "use client";
 
 import Link from "next/link";
-import { onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
+import {
+  createUserWithEmailAndPassword,
+  EmailAuthProvider,
+  linkWithCredential,
+  linkWithPopup,
+  onAuthStateChanged,
+  sendPasswordResetEmail,
+  signInAnonymously,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  signOut,
+  type User,
+} from "firebase/auth";
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
-import { useEffect, useMemo, useState, type ChangeEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import { initialThesisProcesses } from "@/data/initial-thesis-processes";
 import { auth, db, googleProvider, hasFirebaseConfig } from "@/lib/firebase";
 import {
@@ -20,6 +32,7 @@ type Task = Omit<ThesisTask, "priority"> & { priority: TaskPriority };
 type Process = Omit<ThesisProcess, "tasks"> & { tasks: Task[] };
 type Entry = { process: Process; task: Task };
 type Props = { view: "dashboard" | "processes" };
+type AuthMode = "login" | "signup";
 
 const PROJECT_ID = "default-thesis-project";
 const STATUSES: TaskStatus[] = ["not_started", "in_progress", "waiting_for_review", "completed", "on_hold"];
@@ -74,6 +87,23 @@ const sortEntries = (a: Entry, b: Entry) => PORDER[a.task.priority] - PORDER[b.t
 const statusClass = (s: TaskStatus) => ({ not_started:"bg-slate-100 text-slate-600", in_progress:"bg-blue-50 text-blue-700", waiting_for_review:"bg-amber-50 text-amber-700", completed:"bg-emerald-50 text-emerald-700", on_hold:"bg-rose-50 text-rose-700" })[s];
 const priorityClass = (p: TaskPriority) => p === "high" ? "bg-rose-50 text-rose-700" : p === "low" ? "bg-slate-100 text-slate-600" : "bg-amber-50 text-amber-700";
 
+function authErrorMessage(error: unknown) {
+  const code = typeof error === "object" && error && "code" in error ? String((error as { code?: unknown }).code) : "";
+  const messages: Record<string, string> = {
+    "auth/email-already-in-use": "このメールアドレスはすでに登録されています。ログインをお試しください。",
+    "auth/invalid-email": "メールアドレスの形式を確認してください。",
+    "auth/invalid-credential": "メールアドレスまたはパスワードが正しくありません。",
+    "auth/popup-closed-by-user": "ログイン画面が閉じられました。もう一度お試しください。",
+    "auth/provider-already-linked": "このログイン方法はすでに連携されています。",
+    "auth/requires-recent-login": "安全のため、ログインし直してからもう一度お試しください。",
+    "auth/too-many-requests": "試行回数が多すぎます。時間をおいて再度お試しください。",
+    "auth/user-not-found": "このメールアドレスの登録が見つかりません。",
+    "auth/weak-password": "パスワードは6文字以上で入力してください。",
+    "auth/wrong-password": "パスワードが正しくありません。",
+  };
+  return messages[code] ?? "認証処理に失敗しました。入力内容や通信状態を確認してください。";
+}
+
 function projectRef(userId: string) {
   if (!db) throw new Error("Firebaseの環境変数が未設定です。.env.localを確認してください。");
   return doc(db, "users", userId, "projects", PROJECT_ID);
@@ -108,6 +138,7 @@ export function ThesisManager({ view }: Props) {
   const [dataLoading, setDataLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [processes, setProcesses] = useState<Process[]>(initial);
   const [now, setNow] = useState<Date | null>(null);
 
@@ -146,23 +177,78 @@ export function ThesisManager({ view }: Props) {
     return () => { active = false; };
   }, [user]);
 
-  const login = async () => {
+  const loginWithEmail = async (email: string, password: string, mode: AuthMode) => {
     if (!auth) return setError("Firebase Authenticationを初期化できませんでした。");
     setError(null);
+    setNotice(null);
     try {
+      if (mode === "signup") await createUserWithEmailAndPassword(auth, email, password);
+      else await signInWithEmailAndPassword(auth, email, password);
+    } catch (err) {
+      setError(authErrorMessage(err));
+    }
+  };
+
+  const loginWithGoogle = async () => {
+    if (!auth) return setError("Firebase Authenticationを初期化できませんでした。");
+    setError(null);
+    setNotice(null);
+    try {
+      if (auth.currentUser?.isAnonymous) {
+        await linkWithPopup(auth.currentUser, googleProvider);
+        setNotice("ゲストデータをGoogleアカウントへ移行しました。");
+        return;
+      }
       await signInWithPopup(auth, googleProvider);
-    } catch {
-      setError("Googleログインに失敗しました。もう一度お試しください。");
+    } catch (err) {
+      setError(authErrorMessage(err));
+    }
+  };
+
+  const loginAsGuest = async () => {
+    if (!auth) return setError("Firebase Authenticationを初期化できませんでした。");
+    setError(null);
+    setNotice(null);
+    try {
+      await signInAnonymously(auth);
+    } catch (err) {
+      setError(authErrorMessage(err));
+    }
+  };
+
+  const resetPassword = async (email: string) => {
+    if (!auth) return setError("Firebase Authenticationを初期化できませんでした。");
+    setError(null);
+    setNotice(null);
+    try {
+      await sendPasswordResetEmail(auth, email);
+      setNotice("パスワード再設定メールを送信しました。");
+    } catch (err) {
+      setError(authErrorMessage(err));
+    }
+  };
+
+  const upgradeGuestWithEmail = async (email: string, password: string) => {
+    if (!auth?.currentUser?.isAnonymous) return setError("ゲスト利用中のみ正式登録できます。");
+    setError(null);
+    setNotice(null);
+    try {
+      const credential = EmailAuthProvider.credential(email, password);
+      await linkWithCredential(auth.currentUser, credential);
+      setNotice("ゲストデータを正式アカウントへ移行しました。");
+    } catch (err) {
+      setError(authErrorMessage(err));
     }
   };
 
   const logout = async () => {
     if (!auth) return;
     setError(null);
+    setNotice(null);
     try {
       await signOut(auth);
-    } catch {
-      setError("ログアウトに失敗しました。もう一度お試しください。");
+    } catch (err) {
+      setError(authErrorMessage(err));
     }
   };
 
@@ -207,11 +293,11 @@ export function ThesisManager({ view }: Props) {
   const priority = entries.filter(({ task }) => task.status !== "completed").sort(sortEntries).slice(0, 5);
 
   if (authLoading) return <Loading message="認証状態を確認しています。" />;
-  if (!user) return <LoginScreen error={error} onLogin={login} />;
+  if (!user) return <LoginScreen error={error} notice={notice} onEmailAuth={loginWithEmail} onGoogleLogin={loginWithGoogle} onGuestLogin={loginAsGuest} onResetPassword={resetPassword} />;
   if (dataLoading) return <Loading message="Firestoreから工程データを読み込んでいます。" />;
 
-  const notices = <StatusNotices error={error} saving={saving} />;
-  const account = <Account user={user} onLogout={logout} />;
+  const notices = <StatusNotices error={error} notice={notice} saving={saving} />;
+  const account = <Account user={user} onLogout={logout} onGoogleUpgrade={loginWithGoogle} onEmailUpgrade={upgradeGuestWithEmail} />;
 
   return view === "dashboard" ? (
     <>{notices}<Dashboard processes={processes} total={entries.length} completed={completed} overall={overall} overdue={overdue} week={week} priority={priority} account={account} /></>
@@ -221,9 +307,20 @@ export function ThesisManager({ view }: Props) {
 }
 
 function Loading({ message }: { message: string }) { return <div className="mx-auto max-w-7xl"><section className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">{message}</section></div>; }
-function LoginScreen({ error, onLogin }: { error: string | null; onLogin: () => void }) { return <main className="mx-auto flex min-h-[60vh] max-w-xl items-center"><section className="w-full rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"><h1 className="text-2xl font-bold">論文工程管理</h1><p className="mt-2 text-sm leading-6 text-slate-600">Googleアカウントでログインすると、自分専用の工程データをFirestoreに保存できます。</p>{error && <p className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}<button onClick={onLogin} className="mt-6 w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white">Googleでログイン</button></section></main>; }
-function StatusNotices({ error, saving }: { error: string | null; saving: boolean }) { if (!error && !saving) return null; return <div className="mx-auto mb-4 max-w-7xl space-y-2">{saving && <p className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-700">Firestoreへ保存しています。</p>}{error && <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}</div>; }
-function Account({ user, onLogout }: { user: User; onLogout: () => void }) { return <div className="flex flex-wrap items-center justify-end gap-3"><span className="text-xs text-slate-500">{user.email ?? "ログイン中"}</span><button onClick={onLogout} className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700">ログアウト</button></div>; }
+function LoginScreen({ error, notice, onEmailAuth, onGoogleLogin, onGuestLogin, onResetPassword }: { error: string | null; notice: string | null; onEmailAuth: (email: string, password: string, mode: AuthMode) => void; onGoogleLogin: () => void; onGuestLogin: () => void; onResetPassword: (email: string) => void }) {
+  const [mode, setMode] = useState<AuthMode>("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); onEmailAuth(email, password, mode); };
+  return <main className="mx-auto flex min-h-[60vh] max-w-xl items-center"><section className="w-full rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"><h1 className="text-2xl font-bold">論文工程管理</h1><p className="mt-2 text-sm leading-6 text-slate-600">メールアドレス、Googleアカウント、またはゲストとして利用できます。</p>{notice && <p className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</p>}{error && <p className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}<div className="mt-5 grid grid-cols-2 gap-2 rounded-xl bg-slate-100 p-1"><button type="button" onClick={() => setMode("login")} className={`rounded-lg px-3 py-2 text-sm font-semibold ${mode === "login" ? "bg-white text-slate-950 shadow-sm" : "text-slate-600"}`}>ログイン</button><button type="button" onClick={() => setMode("signup")} className={`rounded-lg px-3 py-2 text-sm font-semibold ${mode === "signup" ? "bg-white text-slate-950 shadow-sm" : "text-slate-600"}`}>新規登録</button></div><form onSubmit={submit} className="mt-5 space-y-4"><Label text="メールアドレス"><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900" /></Label><Label text="パスワード"><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900" /></Label><button type="submit" className="w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white">{mode === "login" ? "メールでログイン" : "メールで新規登録"}</button></form><button type="button" onClick={() => onResetPassword(email)} className="mt-3 w-full rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700">パスワード再設定メールを送る</button><div className="my-5 h-px bg-slate-200" /><div className="space-y-3"><button onClick={onGoogleLogin} className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700">Googleでログイン</button><button onClick={onGuestLogin} className="w-full rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">ゲストとして始める</button></div></section></main>;
+}
+function StatusNotices({ error, notice, saving }: { error: string | null; notice: string | null; saving: boolean }) { if (!error && !notice && !saving) return null; return <div className="mx-auto mb-4 max-w-7xl space-y-2">{saving && <p className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-700">Firestoreへ保存しています。</p>}{notice && <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</p>}{error && <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}</div>; }
+function Account({ user, onLogout, onGoogleUpgrade, onEmailUpgrade }: { user: User; onLogout: () => void; onGoogleUpgrade: () => void; onEmailUpgrade: (email: string, password: string) => void }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); onEmailUpgrade(email, password); };
+  return <div className="flex max-w-xl flex-wrap items-center justify-end gap-3">{user.isAnonymous ? <div className="w-full rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><b>ゲスト利用中</b><p className="mt-1">正式登録すると、現在のデータを同じアカウントで引き続き使えます。</p><form onSubmit={submit} className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto]"><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="メールアドレス" className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm" /><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} placeholder="パスワード" className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm" /><button className="rounded-lg bg-amber-600 px-3 py-2 text-sm font-semibold text-white">正式登録</button></form><button onClick={onGoogleUpgrade} className="mt-2 rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-amber-800">Googleへ移行</button></div> : <span className="text-xs text-slate-500">{user.email ?? "ログイン中"}</span>}<button onClick={onLogout} className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700">ログアウト</button></div>;
+}
 
 function Dashboard({ processes, total, completed, overall, overdue, week, priority, account }: { processes: Process[]; total: number; completed: number; overall: number; overdue: Entry[]; week: Entry[]; priority: Entry[]; account: ReactNode }) {
   return <div className="mx-auto max-w-7xl">
