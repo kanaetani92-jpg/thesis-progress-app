@@ -5,6 +5,8 @@ export type TaskStatus =
   | "completed"
   | "on_hold";
 
+export type TaskPriority = "low" | "medium" | "high";
+
 export type ISODateString = `${number}-${number}-${number}`;
 
 export interface ThesisTask {
@@ -17,6 +19,7 @@ export interface ThesisTask {
   readonly deadline: ISODateString | null;
   readonly memo: string;
   readonly isInitial: boolean;
+  readonly priority?: TaskPriority;
 }
 
 export interface ThesisProcess {
@@ -33,4 +36,10 @@ export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   waiting_for_review: "確認待ち",
   completed: "完了",
   on_hold: "保留",
+};
+
+export const TASK_PRIORITY_LABELS: Record<TaskPriority, string> = {
+  low: "低",
+  medium: "中",
+  high: "高",
 };
