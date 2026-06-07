@@ -77,14 +77,29 @@ function mergeSaved(value: unknown): Process[] {
 }
 
 const date = (value: ISODateString) => new Date(`${value}T00:00:00`);
-const today = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; };
-const weekStart = (d: Date) => { const x = today(); x.setTime(d.getTime()); x.setHours(0,0,0,0); x.setDate(x.getDate() - (x.getDay() === 0 ? 6 : x.getDay() - 1)); return x; };
-const weekEnd = (d: Date) => { const x = weekStart(d); x.setDate(x.getDate() + 6); x.setHours(23,59,59,999); return x; };
+const today = () => {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+const weekStart = (d: Date) => {
+  const x = today();
+  x.setTime(d.getTime());
+  x.setHours(0, 0, 0, 0);
+  x.setDate(x.getDate() - (x.getDay() === 0 ? 6 : x.getDay() - 1));
+  return x;
+};
+const weekEnd = (d: Date) => {
+  const x = weekStart(d);
+  x.setDate(x.getDate() + 6);
+  x.setHours(23, 59, 59, 999);
+  return x;
+};
 const isOverdue = (t: Task, now: Date | null) => Boolean(now && t.deadline && t.status !== "completed" && date(t.deadline) < now);
 const isThisWeek = (t: Task, now: Date | null) => Boolean(now && t.deadline && t.status !== "completed" && date(t.deadline) >= weekStart(now) && date(t.deadline) <= weekEnd(now));
 const avg = (tasks: readonly Task[]) => tasks.length ? Math.round(tasks.reduce((n, t) => n + t.progress, 0) / tasks.length) : 0;
 const sortEntries = (a: Entry, b: Entry) => PORDER[a.task.priority] - PORDER[b.task.priority] || (a.task.deadline ?? "9999").localeCompare(b.task.deadline ?? "9999") || a.process.order - b.process.order;
-const statusClass = (s: TaskStatus) => ({ not_started:"bg-slate-100 text-slate-600", in_progress:"bg-blue-50 text-blue-700", waiting_for_review:"bg-amber-50 text-amber-700", completed:"bg-emerald-50 text-emerald-700", on_hold:"bg-rose-50 text-rose-700" })[s];
+const statusClass = (s: TaskStatus) => ({ not_started: "bg-slate-100 text-slate-600", in_progress: "bg-blue-50 text-blue-700", waiting_for_review: "bg-amber-50 text-amber-700", completed: "bg-emerald-50 text-emerald-700", on_hold: "bg-rose-50 text-rose-700" })[s];
 const priorityClass = (p: TaskPriority) => p === "high" ? "bg-rose-50 text-rose-700" : p === "low" ? "bg-slate-100 text-slate-600" : "bg-amber-50 text-amber-700";
 
 function authErrorMessage(error: unknown) {
@@ -170,9 +185,15 @@ export function ThesisManager({ view }: Props) {
     let active = true;
     setDataLoading(true);
     loadProject(user.uid)
-      .then((loaded) => { if (active) setProcesses(loaded); })
-      .catch(() => { if (active) setError("Firestoreからデータを読み込めませんでした。"); })
-      .finally(() => { if (active) setDataLoading(false); });
+      .then((loaded) => {
+        if (active) setProcesses(loaded);
+      })
+      .catch(() => {
+        if (active) setError("Firestoreからデータを読み込めませんでした。");
+      })
+      .finally(() => {
+        if (active) setDataLoading(false);
+      });
 
     return () => { active = false; };
   }, [user]);
@@ -306,7 +327,10 @@ export function ThesisManager({ view }: Props) {
   );
 }
 
-function Loading({ message }: { message: string }) { return <div className="mx-auto max-w-7xl"><section className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">{message}</section></div>; }
+function Loading({ message }: { message: string }) {
+  return <div className="mx-auto max-w-7xl"><section className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm">{message}</section></div>;
+}
+
 function LoginScreen({ error, notice, onEmailAuth, onGoogleLogin, onGuestLogin, onResetPassword }: { error: string | null; notice: string | null; onEmailAuth: (email: string, password: string, mode: AuthMode) => void; onGoogleLogin: () => void; onGuestLogin: () => void; onResetPassword: (email: string) => void }) {
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
@@ -314,7 +338,12 @@ function LoginScreen({ error, notice, onEmailAuth, onGoogleLogin, onGuestLogin, 
   const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); onEmailAuth(email, password, mode); };
   return <main className="mx-auto flex min-h-[60vh] max-w-xl items-center"><section className="w-full rounded-2xl border border-slate-200 bg-white p-6 shadow-sm"><h1 className="text-2xl font-bold">論文工程管理</h1><p className="mt-2 text-sm leading-6 text-slate-600">メールアドレス、Googleアカウント、またはゲストとして利用できます。</p>{notice && <p className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</p>}{error && <p className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}<div className="mt-5 grid grid-cols-2 gap-2 rounded-xl bg-slate-100 p-1"><button type="button" onClick={() => setMode("login")} className={`rounded-lg px-3 py-2 text-sm font-semibold ${mode === "login" ? "bg-white text-slate-950 shadow-sm" : "text-slate-600"}`}>ログイン</button><button type="button" onClick={() => setMode("signup")} className={`rounded-lg px-3 py-2 text-sm font-semibold ${mode === "signup" ? "bg-white text-slate-950 shadow-sm" : "text-slate-600"}`}>新規登録</button></div><form onSubmit={submit} className="mt-5 space-y-4"><Label text="メールアドレス"><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900" /></Label><Label text="パスワード"><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900" /></Label><button type="submit" className="w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white">{mode === "login" ? "メールでログイン" : "メールで新規登録"}</button></form><button type="button" onClick={() => onResetPassword(email)} className="mt-3 w-full rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700">パスワード再設定メールを送る</button><div className="my-5 h-px bg-slate-200" /><div className="space-y-3"><button onClick={onGoogleLogin} className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700">Googleでログイン</button><button onClick={onGuestLogin} className="w-full rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">ゲストとして始める</button></div></section></main>;
 }
-function StatusNotices({ error, notice, saving }: { error: string | null; notice: string | null; saving: boolean }) { if (!error && !notice && !saving) return null; return <div className="mx-auto mb-4 max-w-7xl space-y-2">{saving && <p className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-700">Firestoreへ保存しています。</p>}{notice && <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</p>}{error && <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}</div>; }
+
+function StatusNotices({ error, notice, saving }: { error: string | null; notice: string | null; saving: boolean }) {
+  if (!error && !notice && !saving) return null;
+  return <div className="mx-auto mb-4 max-w-7xl space-y-2">{saving && <p className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-700">Firestoreへ保存しています。</p>}{notice && <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</p>}{error && <p className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}</div>;
+}
+
 function Account({ user, onLogout, onGoogleUpgrade, onEmailUpgrade }: { user: User; onLogout: () => void; onGoogleUpgrade: () => void; onEmailUpgrade: (email: string, password: string) => void }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -344,12 +373,18 @@ function ProcessList({ processes, total, completed, overall, overdueCount, now, 
 
 function Editor({ pid, task, late, patch, changeStatus, changeProgress }: { pid: string; task: Task; late: boolean; patch: (pid: string, tid: string, changes: Partial<Task>) => void; changeStatus: (pid: string, task: Task, status: TaskStatus) => void; changeProgress: (pid: string, task: Task, value: number) => void }) {
   const input = "mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900";
-  return <li className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5"><div className="flex gap-3"><span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-bold">{task.order}</span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="font-semibold">{task.title}</h3><Badge text={TASK_STATUS_LABELS[task.status]} cls={statusClass(task.status)} /><Badge text={`優先度 ${TASK_PRIORITY_LABELS[task.priority]}`} cls={priorityClass(task.priority)} />{late && <Badge text="締切超過" cls="bg-rose-600 text-white" />}</div><p className="mt-1.5 text-sm leading-6 text-slate-600">{task.description}</p><div className="mt-4 grid gap-4 md:grid-cols-3"><Label text="状態"><select value={task.status} onChange={(e: ChangeEvent<HTMLSelectElement>) => changeStatus(pid, task, e.target.value as TaskStatus)} className={input}>{STATUSES.map((s) => <option key={s} value={s}>{TASK_STATUS_LABELS[s]}</option>)}</select></Label><Label text="優先度"><select value={task.priority} onChange={(e: ChangeEvent<HTMLSelectElement>) => patch(pid, task.id, { priority: e.target.value as TaskPriority })} className={input}>{PRIORITIES.map((p) => <option key={p} value={p}>{TASK_PRIORITY_LABELS[p]}</option>)}</select></Label><Label text="締切日"><input type="date" value={task.deadline ?? ""} onChange={(e: ChangeEvent<HTMLInputElement>) => patch(pid, task.id, { deadline: e.target.value ? e.target.value as ISODateString : null })} className={input} /></Label></div><div className="mt-4 grid gap-4 lg:grid-cols-[1fr_8rem]"><Label text={`進捗率 ${task.progress}%`}><input type="range" min={0} max={100} step={5} value={task.progress} onChange={(e: ChangeEvent<HTMLInputElement>) => changeProgress(pid, task, Number(e.target.value))} className="mt-3 w-full accent-indigo-600" /></Label><Label text="数値入力"><input type="number" min={0} max={100} value={task.progress} onChange={(e: ChangeEvent<HTMLInputElement>) => changeProgress(pid, task, Number(e.target.value))} className={input} /></Label></div><Label text="メモ" cls="mt-4"><textarea rows={3} value={task.memo} onChange={(e: ChangeEvent<HTMLTextAreaElement>) => patch(pid, task.id, { memo: e.target.value })} placeholder="指導教員からの指摘、次に確認することなど" className={`${input} resize-y`} /></Label></div></div></li>;
+  return <li className="rounded-xl border border-slate-200 bg-white p-4 sm:p-5"><div className="flex gap-3"><span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-bold">{task.order}</span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="font-semibold">{task.title}</h3><Badge text={TASK_STATUS_LABELS[task.status]} cls={statusClass(task.status)} /><Badge text={`優先度 ${TASK_PRIORITY_LABELS[task.priority]}`} cls={priorityClass(task.priority)} />{late && <Badge text="締切超過" cls="bg-rose-600 text-white" />}</div><p className="mt-1.5 text-sm leading-6 text-slate-600">{task.description}</p><div className="mt-4 grid gap-4 md:grid-cols-3"><Label text="状態"><div className="mt-2 flex flex-wrap gap-2">{STATUSES.map((status) => <ChoiceButton key={status} active={task.status === status} onClick={() => changeStatus(pid, task, status)}>{TASK_STATUS_LABELS[status]}</ChoiceButton>)}</div></Label><Label text="優先度"><div className="mt-2 flex flex-wrap gap-2">{PRIORITIES.map((priority) => <ChoiceButton key={priority} active={task.priority === priority} onClick={() => patch(pid, task.id, { priority })}>{TASK_PRIORITY_LABELS[priority]}</ChoiceButton>)}</div></Label><Label text="締切日"><input type="date" value={task.deadline ?? ""} onChange={(e: ChangeEvent<HTMLInputElement>) => patch(pid, task.id, { deadline: e.target.value ? e.target.value as ISODateString : null })} className={input} /></Label></div><div className="mt-4 grid gap-4 lg:grid-cols-[1fr_8rem]"><Label text={`進捗率 ${task.progress}%`}><input type="range" min={0} max={100} step={5} value={task.progress} onChange={(e: ChangeEvent<HTMLInputElement>) => changeProgress(pid, task, Number(e.target.value))} className="mt-3 w-full accent-indigo-600" /></Label><Label text="数値入力"><input type="number" min={0} max={100} value={task.progress} onChange={(e: ChangeEvent<HTMLInputElement>) => changeProgress(pid, task, Number(e.target.value))} className={input} /></Label></div><Label text="メモ" cls="mt-4"><textarea rows={3} value={task.memo} onChange={(e: ChangeEvent<HTMLTextAreaElement>) => patch(pid, task.id, { memo: e.target.value })} placeholder="指導教員からの指摘、次に確認することなど" className={`${input} resize-y`} /></Label></div></div></li>;
 }
 
-function Header({ title, text, action }: { title: string; text: string; action: ReactNode }) { return <section className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"><div><h1 className="text-2xl font-bold sm:text-3xl">{title}</h1><p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600 sm:text-base">{text}</p></div>{action}</section>; }
+function ChoiceButton({ active, children, onClick }: { active: boolean; children: ReactNode; onClick: () => void }) {
+  return <button type="button" aria-pressed={active} onClick={onClick} className={`min-h-10 rounded-lg border px-3 py-2 text-sm font-semibold transition ${active ? "border-indigo-600 bg-indigo-600 text-white shadow-sm" : "border-slate-300 bg-white text-slate-700 hover:border-indigo-300 hover:bg-indigo-50"}`}>{children}</button>;
+}
+
+function Header({ title, text, action }: { title: string; text: string; action: ReactNode }) {
+  return <section className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"><div><h1 className="text-2xl font-bold sm:text-3xl">{title}</h1><p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600 sm:text-base">{text}</p></div>{action}</section>;
+}
 function Stat({ label, value, detail, alert = false }: { label: string; value: string; detail: string; alert?: boolean }) { return <article className={`rounded-2xl border bg-white p-5 shadow-sm ${alert ? "border-rose-200" : "border-slate-200"}`}><p className="text-sm text-slate-500">{label}</p><p className={`mt-2 text-3xl font-bold ${alert ? "text-rose-700" : "text-slate-950"}`}>{value}</p><p className="mt-2 text-sm text-slate-500">{detail}</p></article>; }
 function Bar({ value, light = false }: { value: number; light?: boolean }) { return <div className={`mt-3 h-2.5 overflow-hidden rounded-full ${light ? "bg-indigo-950/40" : "bg-slate-100"}`} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={value}><div className={`h-full rounded-full ${light ? "bg-white" : "bg-indigo-500"}`} style={{ width: `${value}%` }} /></div>; }
 function Badge({ text, cls }: { text: string; cls: string }) { return <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${cls}`}>{text}</span>; }
 function Label({ text, children, cls = "" }: { text: string; children?: ReactNode; cls?: string }) { return <label className={`block ${cls}`}><span className="text-xs font-semibold text-slate-700">{text}</span>{children}</label>; }
-function Tasks({ title, entries, empty, alert = false }: { title: string; entries: Entry[]; empty: string; alert?: boolean }) { return <section className="mt-6 rounded-2xl border border-slate-200 bg-white shadow-sm"><div className="flex items-center gap-2 border-b border-slate-200 px-5 py-4 sm:px-6"><h2 className="text-lg font-bold">{title}</h2><Badge text={`${entries.length}件`} cls={alert && entries.length ? "bg-rose-50 text-rose-700" : "bg-slate-100 text-slate-600"} /></div>{entries.length === 0 ? <p className="p-6 text-sm text-slate-500">{empty}</p> : <ol className="divide-y divide-slate-100">{entries.map(({ process, task }) => <li key={task.id} className="p-5 sm:px-6"><div className="flex flex-col gap-3 sm:flex-row sm:justify-between"><div><div className="flex flex-wrap gap-2"><Badge text={`優先度 ${TASK_PRIORITY_LABELS[task.priority]}`} cls={priorityClass(task.priority)} /><span className="text-xs text-slate-500">第{process.order}工程・{process.title}</span></div><h3 className="mt-2 font-semibold">{task.title}</h3><p className="mt-1 text-sm text-slate-500">{task.deadline ? `締切：${new Intl.DateTimeFormat("ja-JP", { month:"numeric", day:"numeric", weekday:"short" }).format(date(task.deadline))}` : "締切未設定"}</p></div><Link href={`/processes#${process.id}`} className="text-sm font-semibold text-indigo-600">編集する</Link></div><Bar value={task.progress} /></li>)}</ol>}</section>; }
+function Tasks({ title, entries, empty, alert = false }: { title: string; entries: Entry[]; empty: string; alert?: boolean }) { return <section className="mt-6 rounded-2xl border border-slate-200 bg-white shadow-sm"><div className="flex items-center gap-2 border-b border-slate-200 px-5 py-4 sm:px-6"><h2 className="text-lg font-bold">{title}</h2><Badge text={`${entries.length}件`} cls={alert && entries.length ? "bg-rose-50 text-rose-700" : "bg-slate-100 text-slate-600"} /></div>{entries.length === 0 ? <p className="p-6 text-sm text-slate-500">{empty}</p> : <ol className="divide-y divide-slate-100">{entries.map(({ process, task }) => <li key={task.id} className="p-5 sm:px-6"><div className="flex flex-col gap-3 sm:flex-row sm:justify-between"><div><div className="flex flex-wrap gap-2"><Badge text={`優先度 ${TASK_PRIORITY_LABELS[task.priority]}`} cls={priorityClass(task.priority)} /><span className="text-xs text-slate-500">第{process.order}工程・{process.title}</span></div><h3 className="mt-2 font-semibold">{task.title}</h3><p className="mt-1 text-sm text-slate-500">{task.deadline ? `締切：${new Intl.DateTimeFormat("ja-JP", { month: "numeric", day: "numeric", weekday: "short" }).format(date(task.deadline))}` : "締切未設定"}</p></div><Link href={`/processes#${process.id}`} className="text-sm font-semibold text-indigo-600">編集する</Link></div><Bar value={task.progress} /></li>)}</ol>}</section>; }
