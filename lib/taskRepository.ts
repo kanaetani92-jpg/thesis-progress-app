@@ -2,8 +2,6 @@ import {
   collection,
   doc,
   getDocs,
-  orderBy,
-  query,
   serverTimestamp,
   setDoc,
   writeBatch,
@@ -33,9 +31,17 @@ function taskDocument(uid: string, taskId: string, projectId = DEFAULT_PROJECT_I
   return doc(getDb(), "users", uid, "projects", projectId, "tasks", taskId);
 }
 
+function sortTasks(tasks: FirestoreTask[]) {
+  return tasks.sort((a, b) =>
+    (a.processOrder ?? 0) - (b.processOrder ?? 0)
+    || a.order - b.order
+    || a.id.localeCompare(b.id),
+  );
+}
+
 export async function getTasks(uid: string, projectId = DEFAULT_PROJECT_ID): Promise<FirestoreTask[]> {
-  const snapshot = await getDocs(query(tasksCollection(uid, projectId), orderBy("processOrder"), orderBy("order")));
-  return snapshot.docs.map((taskSnapshot) => taskSnapshot.data() as FirestoreTask);
+  const snapshot = await getDocs(tasksCollection(uid, projectId));
+  return sortTasks(snapshot.docs.map((taskSnapshot) => taskSnapshot.data() as FirestoreTask));
 }
 
 export async function saveTask(uid: string, task: FirestoreTask, projectId = DEFAULT_PROJECT_ID): Promise<void> {
