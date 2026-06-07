@@ -12,10 +12,10 @@ export function Header() {
 
           <div className="min-w-0">
             <p className="truncate text-sm font-bold text-slate-900 sm:text-base">
-              論文工程管理
+              論文伴走カード
             </p>
             <p className="hidden text-xs text-slate-500 sm:block">
-              論文完成までの作業を整理する
+              カードを選んで論文作成の次の一歩を決める
             </p>
           </div>
 
