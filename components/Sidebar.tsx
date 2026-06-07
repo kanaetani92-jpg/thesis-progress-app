@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-type MenuIconName = "dashboard" | "process" | "task" | "settings";
+type MenuIconName = "dashboard" | "process" | "companion" | "task" | "settings";
 
 type NavigationItem = {
   label: string;
@@ -18,13 +18,19 @@ const navigationItems: NavigationItem[] = [
     label: "ダッシュボード",
     description: "現在の進捗を確認",
     icon: "dashboard",
-    href: "/",
+    href: "/dashboard",
   },
   {
     label: "論文工程",
     description: "17工程とタスクの一覧",
     icon: "process",
     href: "/processes",
+  },
+  {
+    label: "論文伴走カード",
+    description: "カードを選んで次の一歩へ",
+    icon: "companion",
+    href: "/",
   },
   {
     label: "タスク",
@@ -61,6 +67,16 @@ function MenuIcon({ name }: { name: MenuIconName }) {
         <circle cx="4" cy="5" r="1.5" />
         <circle cx="4" cy="12" r="1.5" />
         <circle cx="4" cy="19" r="1.5" />
+      </svg>
+    );
+  }
+
+  if (name === "companion") {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="size-5" aria-hidden="true">
+        <path d="M5 5.5A2.5 2.5 0 0 1 7.5 3h9A2.5 2.5 0 0 1 19 5.5v8A2.5 2.5 0 0 1 16.5 16H10l-4 4v-4.5A2.5 2.5 0 0 1 5 13.5v-8Z" />
+        <path d="M8.5 8h7" />
+        <path d="M8.5 11.5h4.5" />
       </svg>
     );
   }
